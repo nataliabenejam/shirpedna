@@ -1,0 +1,222 @@
+---
+title: "2025 MiFish Analysis"
+output: html_document
+date: "2025-11-18"
+---
+
+# This code was run before files were moved to hard drive. Path to file names will need to be changed when files are moved
+
+# Load packages
+library(tidyverse)
+library(phyloseq)
+library(vegan)
+library(RColorBrewer)
+library(microbiome)
+library(metagMisc)
+library(fantaxtic)
+library(ggrepel)
+library(paletteer)
+library(pals)
+library(compositions)
+library(hms)
+library(ggvegan)
+
+# Import and prepare data- I ran it in 3 parts to prevent dada2 from crashing
+asv_counta <-read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025a/ASV2Taxonomy/ASVs_counts_NOUNKNOWNS.tsv", header=TRUE, stringsAsFactors=FALSE)
+asv_countb <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025b/ASV2Taxonomy/ASVs_counts_NOUNKNOWNS.tsv", header=TRUE, stringsAsFactors=FALSE)
+asv_countc <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025c/ASV2Taxonomy/ASVs_counts_NOUNKNOWNS.tsv", header=TRUE, stringsAsFactors= FALSE)
+
+# ASV numbers are unique to each of the subsets of data and overlap across datasets. Put a marker in ASV name to indicate whether it's from library a, b, or c
+asv_counta <- asv_counta %>% mutate(x = paste0(x, "_a"))
+asv_countb <- asv_countb %>% mutate(x = paste0(x, "_b"))
+asv_countc <- asv_countc %>% mutate(x = paste0(x, "_c"))
+
+asv_count <- full_join(asv_counta, asv_countb) %>%
+  full_join(asv_countc)
+  
+row.names(asv_count) <- asv_count$x
+asv_count <- asv_count %>% select(-x)
+asv_count_mat <- as.matrix(asv_count)
+
+asv_taxonomya <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025a/ASV2Taxonomy/results_revamp_MiFish_2025a_asvTaxonomyTable_NOUNKNOWNS.txt", header= TRUE, stringsAsFactors= FALSE)
+asv_taxonomyb <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025b/ASV2Taxonomy/results_revamp_MiFish_2025b_asvTaxonomyTable_NOUNKNOWNS.txt", header= TRUE, stringsAsFactors= FALSE)
+asv_taxonomyc <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025c/ASV2Taxonomy/results_revamp_MiFish_2025c_asvTaxonomyTable_NOUNKNOWNS.txt", header= TRUE, stringsAsFactors= FALSE)
+
+# ASV numbers are unique to each of the subsets of data, a, b, or c. Marker into ASV name to indicate whether it's from library a, b, or c
+asv_taxonomya <- asv_taxonomya %>% mutate(ASV = paste0(ASV, "_a"))
+asv_taxonomyb <- asv_taxonomyb %>% mutate(ASV = paste0(ASV, "_b"))
+asv_taxonomyc <- asv_taxonomyc %>% mutate(ASV = paste0(ASV, "_c"))
+
+asv_taxonomy <- full_join(asv_taxonomya, asv_taxonomyb) %>%
+  full_join(asv_taxonomyc)
+
+row.names(asv_taxonomy) <- asv_taxonomy$ASV
+asv_taxonomy <- asv_taxonomy %>% select(-ASV)
+asv_taxonomy_mat <- as.matrix(asv_taxonomy)
+
+sample_metadataa <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025a/sample_metadata_forR.txt", header= TRUE, stringsAsFactors= TRUE)
+sample_metadatab <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025b/sample_metadata_forR.txt", header= TRUE, stringsAsFactors= TRUE)
+sample_metadatac <- read.delim("/Users/nataliabenejam/shirpeDNA/results_revamp_MiFish_2025c/sample_metadata_forR.txt", header= TRUE, stringsAsFactors= TRUE)
+
+sample_metadata <- full_join(sample_metadataa, sample_metadatab) %>%
+    full_join(sample_metadatac)
+    
+row.names(sample_metadata) <- sample_metadata$Sample
+sample_metadata <- sample_metadata %>% select(-Sample)
+
+ASV_mifish_2025 = otu_table(asv_count_mat, taxa_are_rows = TRUE)
+TAX_mifish_2025 = tax_table(asv_taxonomy_mat)
+samples_mifish_2025 = sample_data(sample_metadata)
+
+# set NAs to zeroes
+ASV_mifish_2025[is.na(ASV_mifish_2025)] <- 0
+
+phylo_mifish_2025 <- phyloseq(ASV_mifish_2025, TAX_mifish_2025, samples_mifish_2025)
+
+
+
+# Filtering & QC
+## How many taxa before filtering
+### First change names of phyloseq objects. Retain `phylo_XX_XX`, which is the unfiltered object. Make new objects, `ps_XX_XX`, which will be what remains after the following filtering steps:
+
+ps_mifish_2025 <- phylo_mifish_2025
+
+# How many taxa before filtering?
+nrow(tax_table(phylo_mifish_2025))
+
+## Replace NA in taxa list with next highest annotated taxon
+tax_table(ps_mifish_2025) <- tax_table(fantaxtic::name_na_taxa(ps_mifish_2025, include_rank = T))
+
+## Remove prokaryotes: check
+unique(tax_table(ps_mifish_2025)[, "Kingdom"])
+# Remove
+ps_mifish_2025 <- subset_taxa(ps_mifish_2025, !Kingdom == 'Bacteria')
+# Check
+unique(tax_table(ps_mifish_2025)[, "Kingdom"])
+
+## Remove non-marine mammals: check unique classes
+unique(tax_table(ps_mifish_2025)[, "Class"])
+# Mammals are present. Check whether these are contamination (eg. human, dog, etc) or something we want to keep (whales, dolphins, etc)
+unique(tax_table(ps_mifish_2025)[tax_table(ps_mifish_2025)[, "Class"] == "Mammalia", "Species"])
+# Remove everything but Cavia porcellus as it was in the positive controls
+ps_mifish_2025 <- subset_taxa(ps_mifish_2025, !Species == 'Homo sapiens' & !Species == 'Bos taurus' & !Species == 'Mus musculus' & !Species == 'Canis lupus' & !Species == 'Felis catus' & !Species == 'Unknown Bovidae (Family)' & !Species == 'Unknown Hominidae (Family)' & !Species == 'Sus scrofa' & !Species == 'Unknown Primates (Order)' & !Species == 'Unknown Artiodactyla (Order)' & !Species == 'Unknown Muridae (Family)' & !Species == 'Unknown Carnivora (Order)' & !Species == 'Unknown Canidae (Family)' & !Species == 'Unknown Homo (Genus)' & !Species == 'Unknown Macroscelidea (Order)' & !Species == 'Unknown Mammalia (Class)' & !Species == 'Unknown Rodentia (Order)' & !Species == 'Unknown Caviidae (Family)')
+# Check to make sure nontarget species were removed
+unique(tax_table(ps_mifish_2025)[tax_table(ps_mifish_2025)[, "Class"] == "Mammalia", "Species"])
+
+## Remove the non target taxa: Birds, Algae, Reptiles, etc
+# Check which Aves were detected
+unique(tax_table(ps_mifish_2025)[tax_table(ps_mifish_2025)[, "Class"] == "Aves", "Species"])
+# None are target species so remove them all
+ps_mifish_2025 <- subset_taxa(ps_mifish_2025, !Class == 'Aves')
+# Remove Zygnemophyceae (green algae)
+ps_mifish_2025 <- subset_taxa(ps_mifish_2025, !Class == 'Zygnemophyceae')
+# Check which Lepidosauria were detected
+unique(tax_table(ps_mifish_2025)[tax_table(ps_mifish_2025)[, "Class"] == "Lepidosauria", "Species"])
+# Only one is Python regius which was one of the positive controls so it is being left
+
+
+
+## Add in Common Names
+# Working with common names from lab group's trawl database, https://docs.google.com/spreadsheets/d/172eRb2JrIJvZHab2wK-DBpMfa1fjE4lp2AownH9Y6AY/edit?gid=0#gid=0 and Liz Suter's database of common names (matched to scientific names and with speficified color keys)
+
+# Import
+commonnames <- read_csv(file = "/Users/nataliabenejam/shirpeDNA/eDNA_databases/commonnames.csv")
+trawl_taxa_db <- read_csv(file = "/Users/nataliabenejam/shirpeDNA/eDNA_databases/ShiRP_Database_Species_Names.csv")
+
+## Are all my common names in the trawl database?
+# Which names are in trawl_taxa_db but NOT in commonnames?
+missing_in_common  <- setdiff(unique(trawl_taxa_db$Names), unique(commonnames$Taxon))
+
+# Which taxa are in commonnames but NOT in trawl_taxa_db?
+missing_in_trawl   <- setdiff(unique(commonnames$Taxon), unique(trawl_taxa_db$Names))
+
+# Extract, update, tax_table
+taxonomy_mifish_2025 <- as.data.frame(tax_table(ps_mifish_2025)) %>%
+    rownames_to_column("ASV") %>%
+    left_join(commonnames, by = c("Species" = "Taxon"))
+row.names(taxonomy_mifish_2025) <- taxonomy_mifish_2025$ASV
+taxonomy_mifish_2025 <- taxonomy_mifish_2025 %>% select(-ASV)
+tax_table(ps_mifish_2025) <- as.matrix(taxonomy_mifish_2025)
+
+# Check for missing (NA) common names (If there are, update commonnames database)
+as.data.frame(tax_table(ps_mifish_2025)) %>% rownames_to_column("ASV") %>% filter(is.na(CommonName))
+
+# Manually checked which ones were NA, and then added ASVs that had sequences over 500 to commonnames.csv file and reran everything from filtering step, including deleting any files created after filtering step
+
+
+
+
+## Remove Low Abundant ASVs
+# Remove ASVs that have <500 reads in a sample
+data.frame(otu_table(ps_mifish_2025)) # compare before
+ps_mifish_2025 <- metagMisc::phyloseq_filter_sample_wise_abund_trim(
+    ps_mifish_2025,
+    minabund = 500,
+    relabund = FALSE)
+data.frame(otu_table(ps_mifish_2025)) # and after
+
+
+
+## Remove Low Effort Samples
+# Plot bar plots of total sequence reads across all samples
+plot_bar(ps_mifish_2025)
+
+# Cut out any sample with <25,000 reads from all libraries
+ps_mifish_2025 <- prune_samples(sample_sums(ps_mifish_2025)>=25000,ps_mifish_2025)
+
+# Plot again to check
+plot_bar(ps_mifish_2025)
+
+
+
+## Agglomerate 
+# Function `tax_glom` will group by Species or other rank. But the function expects full taxonomy, Kingdonm --> Species and I am glomming by "Taxon.CommonName" which is not even an actual rank. This ends up keeping "Anchovies" separate, for example, even though then have the same Taxon.CommonName field bc they have dif genus/ species. Removing all of the rest of the ranks won't work because the dimensions of the tax_table are too small and it gets treated as a vector instead of matrix. Retain only one rank, Kingdom, so the matrix has enough dimensions
+ps_mifish_2025_glommed <- ps_mifish_2025
+
+tax_table(ps_mifish_2025_glommed) <- tax_table(ps_mifish_2025_glommed)[,c(1, 9)]
+
+# Then glom
+ps_mifish_2025_glommed <- tax_glom(ps_mifish_2025_glommed, "Taxon.CommonName")
+
+# Check glommed data tables
+data.frame(tax_table(ps_mifish_2025)) # to compare
+data.frame(tax_table(ps_mifish_2025_glommed))
+data.frame(otu_table(ps_mifish_2025_glommed))
+
+## Krona plots
+# First need to remove weird taxonomy columns- make secondary, non-glommed ps object
+ps_mifish_2025_2 <- ps_mifish_2025
+taxonomy_mifish_2025 <- as.data.frame(tax_table(ps_mifish_2025)) %>%
+    rownames_to_column("ASV") %>% 
+    select(!c("CommonName","Color"))
+row.names(taxonomy_mifish_2025) <- taxonomy_mifish_2025$ASV
+taxonomy_mifish_2025 <- taxonomy_mifish_2025 %>% select(-ASV)
+# new phyloseq object
+tax_table(ps_mifish_2025_2) <- as.matrix(taxonomy_mifish_2025)
+
+mifish_2025_krona <- plot_krona(ps_mifish_2025_2)
+
+## Export tables
+# Every year has 5 tables: 
+# 1) ASV table
+# 2) Taxonomy table (corresponds to ASVs)
+# 3) Sample data
+# 4) Glommed ASV table (aggregated by Species.CommonName)
+# 5) Glommed taxonomy table (corresponds to glommed taxa from #4)
+
+mifish_2025_asv_table <- data.frame(otu_table(ps_mifish_2025))
+write.csv(mifish_2025_asv_table, "mifish_2025_asv_table.csv", row.names = TRUE)
+
+mifish_2025_tax_table <- rownames_to_column(data.frame(tax_table(ps_mifish_2025)), var = "ASV")
+write.csv(mifish_2025_tax_table,"mifish_2025_tax_table.csv", row.names = FALSE)
+
+mifish_2025_sample_data <- data.frame(sample_data(ps_mifish_2025))
+write.csv(mifish_2025_sample_data,"mifish_2025_sample_data.csv", row.names = TRUE)
+
+mifish_2025_glommed_asv_table <- data.frame(otu_table(ps_mifish_2025_glommed))
+write.csv(mifish_2025_glommed_asv_table,"mifish_2025_glommed_asv_table.csv", row.names = TRUE)
+
+mifish_2025_glommed_tax_table <- rownames_to_column(data.frame(tax_table(ps_mifish_2025_glommed)), var = "1stRepresentative_ASV")
+write.csv(mifish_2025_glommed_tax_table,"mifish_2025_glommed_tax_table.csv", row.names = FALSE)
+
+#DONE
